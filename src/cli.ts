@@ -46,14 +46,9 @@ async function login(): Promise<void> {
     await client.submitAuthenticator(flow.processId, code);
   } else if (flow.requiredAction === undefined || flow.requiredAction === 'APP_CONFIRMATION') {
     stdout.write('Bitte die Anmeldung jetzt in der Trade-Republic-App bestätigen.\n');
-    while (Date.now() < flow.expiresAt) {
-      const process = await client.getProcess(flow.processId);
-      if (process.status === 'CONFIRMED' || process.status === 'COMPLETED') break;
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
-    }
-    if (Date.now() >= flow.expiresAt) throw new SafeError('LOGIN_TIMEOUT', 'Die Bestätigung ist abgelaufen.');
+    await client.waitForConfirmation(flow.processId, flow.expiresAt);
   } else {
-    throw new SafeError('LOGIN_CHANGED', `Unbekannte erforderliche Anmeldeaktion: ${flow.requiredAction}`);
+    throw new SafeError('LOGIN_CHANGED', 'Trade Republic verlangt eine unbekannte Anmeldeaktion.');
   }
   await client.persist();
   stdout.write('Anmeldung gespeichert. PIN und Bestätigungscode wurden nicht gespeichert.\n');

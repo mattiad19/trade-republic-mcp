@@ -11,16 +11,29 @@ const WEB_PLATFORM = 'web-pro';
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 Chrome/146.0.0.0 Safari/537.36';
 const MAX_BODY_BYTES = 1024 * 1024;
 
+const CountdownSchema = z.preprocess(
+  (value) => {
+    if (value === null) return undefined;
+    if (typeof value === 'string' && /^\d{1,3}$/.test(value)) return Number(value);
+    return value;
+  },
+  z.number().int().min(0).max(600).optional(),
+);
+
 const LoginResponseSchema = z.object({
   processId: z.string().min(1),
-  countdownInSeconds: z.number().int().positive().optional(),
-}).strict();
+  countdownInSeconds: CountdownSchema,
+});
 
 const ProcessSchema = z.object({
-  status: z.enum(['PENDING', 'CONFIRMED', 'COMPLETED']),
-  requiredAction: z.string().optional(),
-  expiresAt: z.union([z.string(), z.number()]).optional(),
-}).loose();
+  status: z.enum(['PENDING', 'CONFIRMED', 'COMPLETED']).optional(),
+  requiredAction: z.enum(['APP_CONFIRMATION', 'AUTHENTICATOR_VERIFICATION']).nullish(),
+  expiresAt: z.union([z.string().max(64), z.number()]).nullish(),
+});
+
+const ErrorResponseSchema = z.object({
+  errors: z.array(z.object({ errorCode: z.string().max(64) })).min(1),
+});
 
 function fixedUrl(pathname: string): URL {
   if (!pathname.startsWith('/api/')) throw new SafeError('INVALID_ENDPOINT', 'Ungültiger API-Endpunkt.');
@@ -60,10 +73,25 @@ async function safeJson(response: Response): Promise<unknown> {
   try { return JSON.parse(text) as unknown; } catch { throw new SafeError('INVALID_RESPONSE', 'Trade Republic lieferte eine ungültige Antwort.'); }
 }
 
-function mapHttpError(status: number): SafeError {
-  if (status === 401 || status === 403) return new SafeError('AUTH_REQUIRED', 'Die Sitzung ist abgelaufen. Bitte erneut anmelden.');
-  if (status === 429) return new SafeError('RATE_LIMITED', 'Zu viele Anfragen. Bitte später erneut versuchen.');
-  return new SafeError('UPSTREAM_ERROR', `Trade Republic antwortete mit Status ${status}.`);
+async function mapHttpError(response: Response): Promise<SafeError> {
+  if (response.status === 401 || response.status === 403) return new SafeError('AUTH_REQUIRED', 'Die Sitzung ist abgelaufen. Bitte erneut anmelden.');
+  if (response.status === 429) return new SafeError('RATE_LIMITED', 'Zu viele Anfragen. Bitte später erneut versuchen.');
+
+  let errorCode: string | undefined;
+  try {
+    const parsed = ErrorResponseSchema.safeParse(await safeJson(response));
+    errorCode = parsed.success ? parsed.data.errors[0]?.errorCode : undefined;
+  } catch {
+    // Error bodies are optional and never included in public diagnostics.
+  }
+
+  if (errorCode === 'PROCESS_GONE') return new SafeError('LOGIN_TIMEOUT', 'Die Bestätigung ist abgelaufen. Bitte die Anmeldung erneut starten.');
+  if (errorCode === 'ALREADY_PROCESSED') return new SafeError('LOGIN_REJECTED', 'Die Anmeldung wurde abgelehnt oder bereits verwendet.');
+  if (errorCode === 'NOT_FOUND') return new SafeError('LOGIN_NOT_FOUND', 'Trade Republic kennt diese Anmeldeanfrage nicht mehr.');
+  if (errorCode === 'TOO_MANY_REQUESTS') return new SafeError('RATE_LIMITED', 'Zu viele Anmeldeversuche. Bitte später erneut versuchen.');
+  if (errorCode === 'VALIDATION_CODE_INVALID') return new SafeError('INVALID_CODE', 'Der Authenticator-Code ist nicht korrekt.');
+  if (errorCode === 'VALIDATION_CODE_ALREADY_USED') return new SafeError('INVALID_CODE', 'Der Authenticator-Code wurde bereits verwendet.');
+  return new SafeError('UPSTREAM_ERROR', `Trade Republic antwortete mit Status ${response.status}.`);
 }
 
 export class WebAuthClient {
@@ -90,7 +118,7 @@ export class WebAuthClient {
       headers: { ...deviceHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ phoneNumber, pin }),
     });
-    if (!response.ok) throw mapHttpError(response.status);
+    if (!response.ok) throw await mapHttpError(response);
     const login = LoginResponseSchema.safeParse(await safeJson(response));
     if (!login.success) throw new SafeError('LOGIN_CHANGED', 'Der Trade-Republic-Anmeldeablauf hat sich geändert.');
     const process = await this.getProcess(login.data.processId);
@@ -104,10 +132,24 @@ export class WebAuthClient {
 
   public async getProcess(processId: string): Promise<z.infer<typeof ProcessSchema>> {
     const response = await this.request(`/api/v2/auth/web/login/processes/${encodeURIComponent(processId)}`, { headers: deviceHeaders() });
-    if (!response.ok) throw mapHttpError(response.status);
+    if (!response.ok) throw await mapHttpError(response);
     const parsed = ProcessSchema.safeParse(await safeJson(response));
-    if (!parsed.success) throw new SafeError('LOGIN_CHANGED', 'Unbekannter Status im Trade-Republic-Anmeldeablauf.');
+    if (!parsed.success) throw new SafeError('LOGIN_CHANGED', 'Der Status der Trade-Republic-Anmeldung hat ein unbekanntes Format.');
     return parsed.data;
+  }
+
+  public async waitForConfirmation(processId: string, expiresAt: number, pollIntervalMs = 2_000): Promise<void> {
+    while (Date.now() < expiresAt) {
+      const process = await this.getProcess(processId);
+      if (process.status === 'CONFIRMED' || process.status === 'COMPLETED') return;
+      if (process.status !== 'PENDING') {
+        throw new SafeError('LOGIN_CHANGED', 'Trade Republic lieferte einen unbekannten Anmeldestatus.');
+      }
+      const remainingMs = expiresAt - Date.now();
+      if (remainingMs <= 0) break;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(Math.max(pollIntervalMs, 0), remainingMs)));
+    }
+    throw new SafeError('LOGIN_TIMEOUT', 'Die Bestätigung ist abgelaufen.');
   }
 
   public async submitAuthenticator(processId: string, code: string): Promise<void> {
@@ -117,7 +159,7 @@ export class WebAuthClient {
       headers: { ...deviceHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ code }),
     });
-    if (!response.ok) throw mapHttpError(response.status);
+    if (!response.ok) throw await mapHttpError(response);
   }
 
   public async persist(): Promise<void> {
@@ -127,11 +169,11 @@ export class WebAuthClient {
 
   public async refreshSession(): Promise<void> {
     const response = await this.request('/api/v1/auth/web/session', { method: 'GET' });
-    if (!response.ok) throw mapHttpError(response.status);
+    if (!response.ok) throw await mapHttpError(response);
   }
 }
 
-function parseExpiry(value: string | number | undefined, fallbackSeconds: number): number {
+function parseExpiry(value: string | number | null | undefined, fallbackSeconds: number): number {
   if (typeof value === 'number') return value > 1e11 ? value : value * 1000;
   if (typeof value === 'string') {
     const parsed = Date.parse(value);
