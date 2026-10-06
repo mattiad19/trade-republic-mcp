@@ -1,0 +1,10 @@
+node_modules/
+dist/
+bin/
+coverage/
+.DS_Store
+*.log
+.env
+*.pem
+*.key
+*.cookie
