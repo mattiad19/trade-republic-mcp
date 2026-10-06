@@ -7,7 +7,7 @@ describe('security logging', () => {
   it('does not log tool inputs or results', async () => {
     const writes: string[] = [];
     vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { writes.push(String(chunk)); return true; });
-    const secret = 'TEST_SECRET_92c668be';
+    const secret = 'sensitive-test-value-must-not-appear';
     await audited('test_tool', () => Promise.resolve({ secret }));
     expect(writes.join('')).not.toContain(secret);
     expect(writes.join('')).toContain('test_tool');
