@@ -35,6 +35,10 @@ const ErrorResponseSchema = z.object({
   errors: z.array(z.object({ errorCode: z.string().max(64) })).min(1),
 });
 
+const AccountSchema = z.object({
+  securitiesAccountNumber: z.string().min(1).max(100),
+});
+
 function fixedUrl(pathname: string): URL {
   if (!pathname.startsWith('/api/')) throw new SafeError('INVALID_ENDPOINT', 'Ungültiger API-Endpunkt.');
   return new URL(pathname, API_ORIGIN);
@@ -171,6 +175,14 @@ export class WebAuthClient {
     const response = await this.request('/api/v1/auth/web/session', { method: 'GET' });
     if (!response.ok) throw await mapHttpError(response);
   }
+
+  public async getSecuritiesAccountNumber(): Promise<string> {
+    const response = await this.request('/api/v2/auth/account', { headers: deviceHeaders() });
+    if (!response.ok) throw await mapHttpError(response);
+    const parsed = AccountSchema.safeParse(await safeJson(response));
+    if (!parsed.success) throw new SafeError('INVALID_RESPONSE', 'Trade Republic lieferte keine Wertpapierkontonummer.');
+    return parsed.data.securitiesAccountNumber;
+  }
 }
 
 function parseExpiry(value: string | number | null | undefined, fallbackSeconds: number): number {
@@ -217,6 +229,11 @@ export async function refreshStoredSession(): Promise<{ session: StoredSession; 
     return updated;
   })().finally(() => { refreshPromise = null; });
   return refreshPromise;
+}
+
+export async function getSecuritiesAccountNumber(): Promise<string> {
+  const restored = await refreshStoredSession();
+  return await new WebAuthClient(restored.jar).getSecuritiesAccountNumber();
 }
 
 export { deleteSession };

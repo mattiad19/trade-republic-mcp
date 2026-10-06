@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { protocolInternals, subscribe } from '../src/protocol.js';
+import { protocolInternals, READ_TOPICS, subscribe } from '../src/protocol.js';
 import { TickerApi } from '../src/schemas.js';
 
 describe('read-only WebSocket boundary', () => {
@@ -11,5 +11,12 @@ describe('read-only WebSocket boundary', () => {
     expect(protocolInternals.parseFrame(Buffer.from('1 A {"ok":true}'))).toEqual({ id: 1, code: 'A', payload: { ok: true } });
     expect(() => protocolInternals.parseFrame(Buffer.from('not-a-frame'))).toThrow('Ungültige WebSocket-Nachricht');
     expect(() => protocolInternals.parseFrame(Buffer.alloc(1024 * 1024 + 1))).toThrow('zu große Nachricht');
+  });
+
+  it('allows only current read topics', () => {
+    expect(READ_TOPICS).toContain('compactPortfolioByType');
+    expect(READ_TOPICS).toContain('aggregateHistoryLight');
+    expect(READ_TOPICS).not.toContain('compactPortfolio');
+    expect(READ_TOPICS).not.toContain('aggregateHistory');
   });
 });

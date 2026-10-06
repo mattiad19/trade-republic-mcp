@@ -10,7 +10,7 @@ const MAX_MESSAGE_BYTES = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 20_000;
 
 export const READ_TOPICS = [
-  'compactPortfolio', 'cash', 'orders', 'neonSearch', 'instrument', 'ticker', 'aggregateHistory',
+  'compactPortfolioByType', 'cash', 'orders', 'neonSearch', 'instrument', 'ticker', 'aggregateHistoryLight',
 ] as const;
 export type ReadTopic = (typeof READ_TOPICS)[number];
 
@@ -53,10 +53,10 @@ async function cookieHeader(jar: CookieJar): Promise<string> {
 export async function subscribe<T>(topic: ReadTopic, payload: Readonly<Record<string, unknown>>, schema: z.ZodType<T>): Promise<T> {
   if (!allowedTopics.has(topic)) throw new SafeError('TOPIC_FORBIDDEN', 'Dieser API-Topic ist nicht erlaubt.');
   if (Object.hasOwn(payload, 'type')) throw new SafeError('TOPIC_OVERRIDE', 'Das Feld „type“ ist in Payloads nicht erlaubt.');
+  const restored = await refreshStoredSession();
+  const cookie = await cookieHeader(restored.jar);
   const release = await acquire();
   try {
-    const restored = await refreshStoredSession();
-    const cookie = await cookieHeader(restored.jar);
     return await new Promise<T>((resolve, reject) => {
       const ws = new WebSocket(WS_URL, {
         headers: { Cookie: cookie },

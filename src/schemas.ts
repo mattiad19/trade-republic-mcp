@@ -35,29 +35,34 @@ export const PriceHistoryInput = z.object({
 }).strict();
 
 const position = z.object({
-  instrumentId: z.string().max(100),
+  isin: Isin,
   netSize: finiteNumber,
-  netValue: finiteNumber,
-  averageBuyIn: finiteNumber.optional(),
-  unrealisedAverageCost: finiteNumber.optional(),
-  realisedProfit: finiteNumber.optional(),
+  averageBuyIn: finiteNumber.nullish(),
+  realisedProfit: finiteNumber.nullish(),
+  name: z.string().max(500).optional(),
+  bondInfo: z.unknown().nullish(),
 }).loose();
 export const PortfolioApi = z.object({
-  positions: z.array(position).max(10_000),
-  netValue: finiteNumber,
-  referenceChangeProfit: finiteNumber.optional(),
-  referenceChangeProfitPercent: finiteNumber.optional(),
-  unrealisedProfit: finiteNumber.optional(),
-  unrealisedProfitPercent: finiteNumber.optional(),
-  unrealisedCost: finiteNumber.optional(),
+  categories: z.array(z.object({
+    categoryType: z.string().max(100).optional(),
+    positions: z.array(position).max(10_000),
+  }).loose()).max(100),
 }).loose();
 
-export const CashApi = z.object({
+const CashAccountApi = z.object({
   amount: finiteNumber.optional(), availableCash: finiteNumber.optional(),
   currencyId: z.string().max(10).optional(), currency: z.string().max(10).optional(),
 }).loose().refine((value) => value.amount !== undefined || value.availableCash !== undefined);
+export const CashApi = z.union([
+  CashAccountApi,
+  z.array(CashAccountApi).min(1).max(100).transform((accounts) => {
+    const account = accounts[0];
+    if (account === undefined) throw new Error('Validated cash account array is empty');
+    return account;
+  }),
+]);
 
-const quote = z.object({ price: finiteNumber, size: finiteNumber.optional(), time: z.string().max(100).optional() }).loose();
+const quote = z.object({ price: finiteNumber, size: finiteNumber.optional(), time: z.union([z.number(), z.string().max(100)]).optional() }).loose();
 export const TickerApi = z.object({ bid: quote, ask: quote, last: quote.optional() }).loose();
 export const HistoryApi = z.object({
   aggregates: z.array(z.object({
@@ -69,17 +74,24 @@ export const HistoryApi = z.object({
 export const SearchApi = z.object({
   results: z.array(z.object({
     isin: z.string().max(20), name: z.string().max(500), type: z.string().max(100).optional(),
-    tags: z.array(z.string().max(100)).max(100).optional(),
+    instrumentType: z.string().max(100).optional(), instrumentCategory: z.string().max(100).optional(),
+    tags: z.array(z.object({
+      id: z.string().max(100), name: z.string().max(100), type: z.string().max(100).optional(),
+    }).loose()).max(100).optional(),
   }).loose()).max(5_000),
+  resultCount: z.number().int().min(0).optional(),
 }).loose();
 export const InstrumentApi = z.object({
   isin: z.string().max(20), name: z.string().max(500), shortName: z.string().max(500).optional(),
   intlSymbol: z.string().max(50).optional(), homeSymbol: z.string().max(50).optional(),
   typeId: z.string().max(100).optional(), wkn: z.string().max(20).optional(),
+  exchangeIds: z.array(z.string().max(50)).max(100).optional(),
   company: z.object({
-    name: z.string().max(500), description: z.string().max(20_000).optional(), countryOfOrigin: z.string().max(100).optional(),
-  }).loose().optional(),
-  exchanges: z.array(z.object({ exchangeId: z.string().max(50), name: z.string().max(200).optional() }).loose()).max(100).optional(),
+    name: z.string().max(500), description: z.string().max(20_000).nullish(), countryOfOrigin: z.string().max(100).optional(),
+  }).loose().nullish(),
+  exchanges: z.array(z.object({
+    exchangeId: z.string().max(50).optional(), slug: z.string().max(50).optional(), name: z.string().max(200).optional(),
+  }).loose().refine((exchange) => exchange.exchangeId !== undefined || exchange.slug !== undefined)).max(100).optional(),
   tags: z.array(z.object({ id: z.string().max(100), name: z.string().max(100) }).loose()).max(100).optional(),
 }).loose();
 

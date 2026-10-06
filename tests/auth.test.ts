@@ -90,4 +90,14 @@ describe('Trade Republic v2 authentication', () => {
     expect(String(caught)).not.toContain(secretMarker);
     expect(String(caught)).not.toContain('private-process-id');
   });
+
+  it('extracts only the bounded securities account number from account data', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse({
+      securitiesAccountNumber: 'SEC-ACCOUNT-1',
+      name: { first: 'PRIVATE', last: 'PRIVATE' },
+      postalAddress: { street: 'PRIVATE' },
+    })));
+
+    await expect(new WebAuthClient().getSecuritiesAccountNumber()).resolves.toBe('SEC-ACCOUNT-1');
+  });
 });
